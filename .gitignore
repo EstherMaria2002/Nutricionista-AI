@@ -1,0 +1,42 @@
+# Secretos y claves API
+.env
+.token.pickle
+credentials.json
+*.pickle
+
+# Bases de datos
+*.db
+*.sqlite
+*.sqlite3
+
+# Archivos generados
+*.pdf
+menu_semanal.pdf
+recetas_completas.pdf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
