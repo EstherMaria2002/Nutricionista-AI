@@ -5,3 +5,5 @@ numpy
 scikit-learn
 python-dotenv
 fpdf
+uritemplate
+httplib2
