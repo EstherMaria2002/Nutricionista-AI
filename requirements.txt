@@ -1,16 +1,6 @@
 streamlit>=1.45      # accept_new_options (chips + texto libre)
 fpdf2>=2.7.9         # PDF real (pdf.table); NO instalar el paquete antiguo "fpdf" a la vez
 requests
-<<<<<<< HEAD
 # Opcional, solo para exportar a Google Calendar:
 # google-api-python-client
 # google-auth-oauthlib
-=======
-beautifulsoup4
-numpy
-scikit-learn
-python-dotenv
-fpdf
-uritemplate
-httplib2
->>>>>>> d36f220e20039c78f2acc624d13a4362c4aaed0d
