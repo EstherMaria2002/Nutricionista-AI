@@ -5,12 +5,18 @@ from datetime import datetime
 
 DB_NAME = "recetas.db"
 
+
+def _conn():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def inicializar_db():
-    """Crea las tablas necesarias"""
+    """Crea las tablas necesarias (y migra columnas nuevas sin tocar los datos existentes)."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    
-    # Tabla de recetas
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS recetas (
             id_api TEXT PRIMARY KEY,
@@ -28,8 +34,11 @@ def inicializar_db():
             veces_usada INTEGER DEFAULT 0
         )
     ''')
-    
-    # Tabla de menús generados
+    # NUEVO: momentos de comida aptos (JSON) para recetas generadas por IA
+    columnas = [r[1] for r in cursor.execute("PRAGMA table_info(recetas)")]
+    if "momentos" not in columnas:
+        cursor.execute("ALTER TABLE recetas ADD COLUMN momentos TEXT")
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS menus (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,8 +48,6 @@ def inicializar_db():
             recetas_seleccionadas TEXT
         )
     ''')
-    
-    # Tabla de las preferencias del usuario
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS preferencias (
             usuario_id TEXT,
@@ -49,83 +56,73 @@ def inicializar_db():
             FOREIGN KEY (receta_id) REFERENCES recetas(id_api)
         )
     ''')
-    
     conn.commit()
     conn.close()
+
 
 def guardar_receta_db(receta: Dict):
-    """Guarda o actualiza una receta en la base de datos"""
+    """Guarda o actualiza una receta (conserva veces_usada si ya existía)."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    
     cursor.execute('''
-        INSERT OR REPLACE INTO recetas 
-        (id_api, nombre, ingredientes, instrucciones, calorias, proteinas, 
-         grasas, carbos, tiempo_preparacion, url_imagen, fuente, fecha_agregado)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO recetas
+        (id_api, nombre, ingredientes, instrucciones, calorias, proteinas,
+         grasas, carbos, tiempo_preparacion, url_imagen, fuente, fecha_agregado, momentos)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id_api) DO UPDATE SET
+            nombre=excluded.nombre, ingredientes=excluded.ingredientes, instrucciones=excluded.instrucciones,
+            calorias=excluded.calorias, proteinas=excluded.proteinas, grasas=excluded.grasas,
+            carbos=excluded.carbos, tiempo_preparacion=excluded.tiempo_preparacion,
+            url_imagen=excluded.url_imagen, fuente=excluded.fuente, fecha_agregado=excluded.fecha_agregado,
+            momentos=excluded.momentos
     ''', (
-        receta['id_api'],
-        receta['nombre'],
-        json.dumps(receta['ingredientes']),
-        receta['instrucciones'],
-        receta['calorias'],
-        receta['proteinas'],
-        receta['grasas'],
-        receta['carbos'],
-        receta.get('tiempo_preparacion', 30),
-        receta.get('url_imagen', ''),
-        receta['fuente'],
-        datetime.now()
+        receta['id_api'], receta['nombre'], json.dumps(receta['ingredientes'], ensure_ascii=False),
+        receta['instrucciones'], receta['calorias'], receta['proteinas'], receta['grasas'], receta['carbos'],
+        receta.get('tiempo_preparacion', 30), receta.get('url_imagen', ''), receta['fuente'],
+        datetime.now(), json.dumps(receta.get('momentos') or [], ensure_ascii=False),
     ))
-    
     conn.commit()
     conn.close()
 
+
 def obtener_recetas_db(limite: int = 100) -> List[Dict]:
-    """Obtiene recetas de la base de datos local"""
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT * FROM recetas 
-        ORDER BY veces_usada ASC, fecha_agregado DESC 
-        LIMIT ?
-    ''', (limite,))
-    
+    """Obtiene recetas de la base local (las menos usadas primero)."""
+    conn = _conn()
+    filas = conn.execute('''
+        SELECT * FROM recetas ORDER BY veces_usada ASC, fecha_agregado DESC LIMIT ?
+    ''', (limite,)).fetchall()
     recetas = []
-    for row in cursor.fetchall():
-        receta = {
-            "id_api": row[0],
-            "nombre": row[1],
-            "ingredientes": json.loads(row[2]),
-            "instrucciones": row[3],
-            "calorias": row[4],
-            "proteinas": row[5],
-            "grasas": row[6],
-            "carbos": row[7],
-            "tiempo_preparacion": row[8],
-            "url_imagen": row[9],
-            "fuente": row[10]
-        }
-        recetas.append(receta)
-    
+    for row in filas:
+        try:
+            ingredientes = json.loads(row["ingredientes"] or "[]")
+        except json.JSONDecodeError:
+            ingredientes = []
+        recetas.append({
+            "id_api": row["id_api"], "nombre": row["nombre"], "ingredientes": ingredientes,
+            "instrucciones": row["instrucciones"], "calorias": row["calorias"], "proteinas": row["proteinas"],
+            "grasas": row["grasas"], "carbos": row["carbos"], "tiempo_preparacion": row["tiempo_preparacion"],
+            "url_imagen": row["url_imagen"], "fuente": row["fuente"],
+            "momentos": json.loads(row["momentos"]) if row["momentos"] else [],
+        })
     conn.close()
     return recetas
+
+
+def marcar_recetas_usadas(ids: List[str]):
+    """Incrementa veces_usada (rota las recetas en próximas generaciones)."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.executemany("UPDATE recetas SET veces_usada = veces_usada + 1 WHERE id_api = ?", [(i,) for i in ids])
+    conn.commit()
+    conn.close()
+
 
 def guardar_menu_db(datos_usuario: Dict, menu: str, recetas_ids: List[str]):
     """Guarda el menú generado en la base de datos"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    
     cursor.execute('''
         INSERT INTO menus (fecha_generacion, datos_usuario, menu_semanal, recetas_seleccionadas)
         VALUES (?, ?, ?, ?)
-    ''', (
-        datetime.now(),
-        json.dumps(datos_usuario),
-        menu,
-        json.dumps(recetas_ids)
-    ))
-    
+    ''', (datetime.now(), json.dumps(datos_usuario, ensure_ascii=False, default=str), menu, json.dumps(recetas_ids)))
     conn.commit()
     conn.close()
